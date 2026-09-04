@@ -41,6 +41,7 @@ import {
   vacuumDatabase,
   cleanupOrphanedContent,
   cleanupOrphanedVectors,
+  copyVectorsToNewCollections,
   deleteLLMCache,
   deleteInactiveDocuments,
   clearAllEmbeddings,
@@ -206,6 +207,10 @@ export type UpdateResult = {
   unchanged: number;
   removed: number;
   skipped: number;
+  /** Vector rows removed because their (hash, collection) no longer has an active document. */
+  staleVectorsRemoved: number;
+  /** Vector rows copied into the partition of a collection that gained an already-embedded hash. */
+  vectorsCopied: number;
   needsEmbedding: number;
 };
 
@@ -622,6 +627,13 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
         totalSkipped += result.skipped;
       }
 
+      // A changed file rewrites its document's hash in place and strands the
+      // old hash's partition rows, which take k slots from scoped searches;
+      // a hash that joined a collection while embedded elsewhere stays
+      // unsearchable there until its rows are copied.
+      const staleVectorsRemoved = cleanupOrphanedVectors(db);
+      const vectorsCopied = copyVectorsToNewCollections(db).copied;
+
       return {
         collections: filtered.length,
         indexed: totalIndexed,
@@ -629,6 +641,8 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
         unchanged: totalUnchanged,
         removed: totalRemoved,
         skipped: totalSkipped,
+        staleVectorsRemoved,
+        vectorsCopied,
         needsEmbedding: internal.getHashesNeedingEmbedding(),
       };
     },
