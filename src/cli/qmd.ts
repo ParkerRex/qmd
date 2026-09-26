@@ -2287,7 +2287,9 @@ function reportSkippedReads(skippedFiles: { file: string; code: string }[]): voi
   if (skippedFiles.length === 0) return;
   const sizeLimitMb = Math.round(REINDEX_MAX_FILE_SIZE / (1024 * 1024));
   for (const skipped of skippedFiles) {
-    if (skipped.code === "OUTSIDE_COLLECTION") {
+    if (skipped.code === "ROOT_MISSING") {
+      console.warn(`⚠ Collection root not found, index left unchanged: ${skipped.file}`);
+    } else if (skipped.code === "OUTSIDE_COLLECTION") {
       console.warn(`⚠ Skipped file outside collection: ${skipped.file}`);
     } else if (skipped.code === "FILE_TOO_LARGE") {
       console.warn(`⚠ Skipped file over ${sizeLimitMb} MB: ${skipped.file}`);
@@ -2297,7 +2299,8 @@ function reportSkippedReads(skippedFiles: { file: string; code: string }[]): voi
   }
   const escaped = skippedFiles.filter(f => f.code === "OUTSIDE_COLLECTION").length;
   const tooLarge = skippedFiles.filter(f => f.code === "FILE_TOO_LARGE").length;
-  const unreadable = skippedFiles.length - escaped - tooLarge;
+  const rootMissing = skippedFiles.filter(f => f.code === "ROOT_MISSING").length;
+  const unreadable = skippedFiles.length - escaped - tooLarge - rootMissing;
   if (escaped) console.warn(`Skipped ${escaped} file(s) outside the collection root`);
   if (tooLarge) console.warn(`Skipped ${tooLarge} file(s) over ${sizeLimitMb} MB`);
   if (unreadable) console.warn(`Skipped ${unreadable} unreadable file(s)`);
