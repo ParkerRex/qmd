@@ -3452,6 +3452,20 @@ describe("Vector Table", () => {
 
     await cleanupTestDb(store);
   });
+
+  test("insertEmbedding leaves no content_vectors row when the vector write fails", async () => {
+    const store = await createTestStore();
+    store.ensureVecTable(3);
+
+    // A 4-dim vector into a 3-dim table makes the vectors_vec insert fail.
+    expect(() => store.insertEmbedding("mismatch", 0, 0, new Float32Array([1, 2, 3, 4]), "test-model", new Date().toISOString())).toThrow(/dimension mismatch/i);
+
+    // A leftover row would hide the hash from the pending-embedding query forever.
+    const metadataCount = store.db.prepare(`SELECT COUNT(*) AS count FROM content_vectors`).get() as { count: number };
+    expect(metadataCount.count).toBe(0);
+
+    await cleanupTestDb(store);
+  });
 });
 
 // =============================================================================

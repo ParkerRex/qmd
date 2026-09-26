@@ -4489,8 +4489,9 @@ export function clearAllEmbeddings(db: Database, collection?: string): void {
  * Insert a single embedding into both content_vectors and vectors_vec tables.
  * The hash_seq key is formatted as "hash_seq" for the vectors_vec table.
  *
- * content_vectors is inserted first so that getHashesForEmbedding (which checks
- * only content_vectors) won't re-select the hash on a crash between the two inserts.
+ * Both rows are written in one transaction. The pending-embedding queries check
+ * only content_vectors, so a bookkeeping row without its vector would never be
+ * re-selected; a failed or interrupted vector write must roll both back.
  *
  * vectors_vec uses DELETE + INSERT instead of INSERT OR REPLACE because sqlite-vec's
  * vec0 virtual tables silently ignore the OR REPLACE conflict clause.
@@ -4508,8 +4509,9 @@ export function insertEmbedding(
 ): void {
   const hashSeq = `${hash}_${seq}`;
 
-  withLazyContentVectorMigration(db, () => {
-    // Insert content_vectors first — crash-safe ordering (see getHashesForEmbedding)
+  // The migration wrapper stays outside the transaction: a missing-column error
+  // rolls the transaction back, the repair runs, and the whole write retries.
+  withLazyContentVectorMigration(db, () => db.transaction(() => {
     const insertContentVectorStmt = db.prepare(`INSERT OR REPLACE INTO content_vectors (hash, seq, pos, model, embed_fingerprint, total_chunks, embedded_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
     insertContentVectorStmt.run(hash, seq, pos, model, fingerprint, totalChunks, embeddedAt);
 
@@ -4518,7 +4520,7 @@ export function insertEmbedding(
     const insertVecStmt = db.prepare(`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)`);
     deleteVecStmt.run(hashSeq);
     insertVecStmt.run(hashSeq, embedding);
-  });
+  })());
 }
 
 function removeIncompleteEmbeddings(db: Database, expectedChunksByHash: Map<string, number>, model: string): number {

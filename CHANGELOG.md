@@ -13,6 +13,10 @@
   with the store-selected embedding model instead of the global default. This
   keeps chunk boundaries aligned with the model that creates and verifies the
   stored vectors without initializing an unrelated provider.
+- `qmd embed` no longer loses a chunk for good when writing its vector fails
+  (for example a dimension mismatch or a full disk). The chunk's bookkeeping
+  row used to commit before the vector, so later runs thought it was done and
+  never retried it. Both rows now commit together (#996).
 
 ## [2.8.3] - 2026-08-16
 
