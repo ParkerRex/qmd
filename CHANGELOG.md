@@ -14,6 +14,13 @@
   keeps chunk boundaries aligned with the model that creates and verifies the
   stored vectors without initializing an unrelated provider.
 
+- `qmd query` and `qmd vsearch` now drop repeated query expansions before
+  searching. The expansion model can repeat a line, and the cache kept every
+  copy: one reported query ran 23 expansions where 9 were distinct, and each
+  copy ran its own search. Cached expansions are deduplicated when read, so
+  existing caches need no rebuild. Repeated lex lines used to count more than
+  once in the rank fusion, so result order can shift slightly. (#921)
+
 ## [2.8.3] - 2026-08-16
 
 ### Security
