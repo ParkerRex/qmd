@@ -1683,7 +1683,11 @@ export async function reindexCollection(
       continue;
     }
 
+    // Empty files are never indexed. A file that became empty must not keep
+    // its old row active, so treat it like a deleted file: unseen, and
+    // deactivated by the pass below.
     if (!content.trim()) {
+      seenPaths.delete(path);
       processed++;
       continue;
     }

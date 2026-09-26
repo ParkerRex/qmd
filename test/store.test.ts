@@ -2826,6 +2826,43 @@ describe("Reindex Collection", () => {
     expect(paths.map(r => r.path)).toEqual(["X - b.md", "a.md"]);
   });
 
+  test("deactivates a document whose file became empty", async () => {
+    const store = await createTestStore();
+    const collectionName = "emptied";
+    const collectionPath = join(testDir, `emptied-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(collectionPath, { recursive: true });
+    await writeFile(join(collectionPath, "a.md"), "# A\n\nzebra\n");
+    await writeFile(join(collectionPath, "b.md"), "# B\n\nbravo\n");
+
+    const activeBodies = () => store.db.prepare(`
+      SELECT content.doc AS body FROM documents d
+      JOIN content ON content.hash = d.hash
+      WHERE d.collection = ? AND d.active = 1
+    `).all(collectionName) as { body: string }[];
+
+    try {
+      const initial = await reindexCollection(store, collectionPath, "**/*.md", collectionName);
+      expect(initial.indexed).toBe(2);
+
+      // Empty files are never indexed, so a file that becomes empty must
+      // leave the index the same way a deleted file does.
+      await writeFile(join(collectionPath, "a.md"), "");
+      const afterEmpty = await reindexCollection(store, collectionPath, "**/*.md", collectionName);
+      expect(afterEmpty.removed).toBe(1);
+      expect(afterEmpty.unchanged).toBe(1);
+      expect(activeBodies().map(r => r.body).join("")).not.toContain("zebra");
+
+      // Writing content back reactivates it.
+      await writeFile(join(collectionPath, "a.md"), "# A\n\nzebra again\n");
+      const afterRestore = await reindexCollection(store, collectionPath, "**/*.md", collectionName);
+      expect(afterRestore.indexed).toBe(1);
+      expect(activeBodies().map(r => r.body).join("")).toContain("zebra again");
+    } finally {
+      await rm(collectionPath, { recursive: true, force: true });
+      await cleanupTestDb(store);
+    }
+  });
+
   test("does not index a file symlink whose target is outside the collection", async () => {
     const store = await createTestStore();
     const parent = join(testDir, `escape-sym-${Date.now()}-${Math.random().toString(36).slice(2)}`);

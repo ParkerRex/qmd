@@ -9,6 +9,9 @@
 
 ### Fixed
 
+- `qmd update` now deactivates a document whose file became empty. The old
+  body stayed active and kept matching `search`, `query` and `get`, because
+  the empty-file skip still counted the path as seen. (#991)
 - Embedding generation and legacy fingerprint adoption now tokenize documents
   with the store-selected embedding model instead of the global default. This
   keeps chunk boundaries aligned with the model that creates and verifies the
