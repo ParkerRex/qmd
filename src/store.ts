@@ -1696,6 +1696,17 @@ function deleteFileSyncStateForCollection(db: Database, collectionName: string, 
 }
 
 /**
+ * A file modified within this long of the stat that read it gets its sync row
+ * stored with UNTRUSTED_SYNC_MTIME, which the fast path never matches. On a
+ * filesystem whose mtime granule is 1-2 s (HFS+, FAT, some network mounts), a
+ * same-size rewrite in that window would keep both mtime and size, and the
+ * fast path would skip it for good. The next update reads such a file once
+ * more and trusts it once its mtime is older: git's "racily clean" rule.
+ */
+const RACY_SYNC_WINDOW_MS = 2000;
+const UNTRUSTED_SYNC_MTIME = -1;
+
+/**
  * Maximum file size to index — prevents OOM on accidental binary inclusion.
  */
 export const REINDEX_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -1780,6 +1791,7 @@ export async function reindexCollection(
 
     // Stat first — mtime+size fast-path (no read)
     let stat: ReturnType<typeof statSync> | null = null;
+    const statTimeMs = Date.now();
     try {
       stat = statSync(filepath);
     } catch (err) {
@@ -1797,6 +1809,7 @@ export async function reindexCollection(
 
     const mtimeMs = stat.mtimeMs;
     const size = stat.size;
+    const syncMtimeMs = statTimeMs - mtimeMs < RACY_SYNC_WINDOW_MS ? UNTRUSTED_SYNC_MTIME : mtimeMs;
 
     // Skip large files (>10MB) — prevents OOM
     if (size > REINDEX_MAX_FILE_SIZE) {
@@ -1846,7 +1859,7 @@ export async function reindexCollection(
     // Hash matches cached sync state but mtime differed (clock skew, backup restore) — only update mtime cache
     if (cached && cached.content_hash === hash) {
       // Update sync state mtime/size only
-      upsertFileSyncState(db, collectionName, path, mtimeMs, size, hash, cached.document_id);
+      upsertFileSyncState(db, collectionName, path, syncMtimeMs, size, hash, cached.document_id);
       unchanged++;
       processed++;
       // Keep content in memory for metadata sync if needed? For speed, skip metadata sync on hash-match fast-path.
@@ -1891,7 +1904,7 @@ export async function reindexCollection(
     }
 
     // Upsert sync state after successful indexing
-    upsertFileSyncState(db, collectionName, path, mtimeMs, size, hash, documentId);
+    upsertFileSyncState(db, collectionName, path, syncMtimeMs, size, hash, documentId);
 
     // Metadata extraction
     const extraction = syncDocumentMetadata(db, documentId, content, path,
