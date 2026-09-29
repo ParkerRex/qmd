@@ -3949,6 +3949,7 @@ export function listCollections(db: Database): { name: string; pwd: string; glob
 export function removeCollection(db: Database, collectionName: string): { deletedDocs: number; cleanedHashes: number } {
   // Delete documents from database
   const docResult = db.prepare(`DELETE FROM documents WHERE collection = ?`).run(collectionName);
+  db.prepare(`DELETE FROM file_sync_state WHERE collection = ?`).run(collectionName);
 
   // Clean up orphaned content hashes
   const cleanupResult = db.prepare(`
@@ -3973,6 +3974,10 @@ export function renameCollection(db: Database, oldName: string, newName: string)
   // Update all documents with the new collection name in database
   db.prepare(`UPDATE documents SET collection = ? WHERE collection = ?`)
     .run(newName, oldName);
+  // The documents keep their ids and paths, so their sync rows stay valid
+  // under the new name. Rows already under it belong to no collection.
+  db.prepare(`DELETE FROM file_sync_state WHERE collection = ?`).run(newName);
+  db.prepare(`UPDATE file_sync_state SET collection = ? WHERE collection = ?`).run(newName, oldName);
 
   // Rename in store_collections
   renameStoreCollection(db, oldName, newName);
