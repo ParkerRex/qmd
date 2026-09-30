@@ -4537,21 +4537,6 @@ function scopedCollectionNames(scope: CollectionScope): string[] | undefined {
   return names.length > 0 ? names : undefined;
 }
 
-function mergeSearchResultsByScore(lists: SearchResult[][], limit: number): SearchResult[] {
-  const best = new Map<string, SearchResult>();
-  for (const list of lists) {
-    for (const r of list) {
-      const prev = best.get(r.filepath);
-      if (!prev || r.score > prev.score) best.set(r.filepath, r);
-    }
-  }
-  // Ties go to the smaller filepath, so the order the collections were named
-  // never decides which of two equal hits survives the limit.
-  return Array.from(best.values())
-    .sort((a, b) => b.score - a.score || compareFilepaths(a, b))
-    .slice(0, limit);
-}
-
 function compareFilepaths(a: { filepath: string }, b: { filepath: string }): number {
   return a.filepath < b.filepath ? -1 : a.filepath > b.filepath ? 1 : 0;
 }
@@ -4616,8 +4601,8 @@ export function searchFTS(db: Database, query: string, limit: number = 20, colle
     params.push(...compiledFilter.params);
   }
 
-  // bm25 lower is better; sort ascending, ties by filepath as in
-  // mergeSearchResultsByScore.
+  // bm25 lower is better; sort ascending. Ties go to the smaller filepath, so
+  // the order the collections were named never decides which equal hit survives.
   sql += ` ORDER BY fm.bm25_score ASC, filepath ASC LIMIT ?`;
   params.push(limit);
 
@@ -4847,7 +4832,7 @@ export async function searchVec(db: Database, query: string, model: string, limi
 
   // Each target yields its own nearest `limit` documents (or all it holds), so
   // merging them by distance gives the scope's exact nearest `limit`. Ties go
-  // to the smaller filepath, as in mergeSearchResultsByScore.
+  // to the smaller filepath, as in searchFTS.
   return scanTargets
     .flatMap(target => nearestVecDocuments(scan, resolve, queryVec, limit, target))
     .sort((a, b) => a.distance - b.distance || compareFilepaths(a, b))
