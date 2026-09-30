@@ -3146,6 +3146,50 @@ describe("Reindex Collection file sync state (#962)", () => {
     }
   });
 
+  test("reindexCollection groups its writes into transactions", async () => {
+    const store = await createTestStore();
+    const collectionPath = join(testDir, `batched-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(collectionPath, { recursive: true });
+    for (let i = 0; i < 5; i++) await writeFile(join(collectionPath, `d${i}.md`), `# D${i}\n\nbody ${i}\n`);
+    const seen: boolean[] = [];
+
+    try {
+      const result = await reindexCollection(store, collectionPath, "**/*.md", "batched", {
+        onProgress: () => seen.push(store.db.inTransaction),
+      });
+      expect(result.indexed).toBe(5);
+      expect(seen).toContain(true);
+      expect(store.db.inTransaction).toBe(false);
+      const rows = store.db.prepare(`SELECT COUNT(*) AS c FROM file_sync_state WHERE collection = ?`).get("batched") as { c: number };
+      expect(rows.c).toBe(5);
+    } finally {
+      await rm(collectionPath, { recursive: true, force: true });
+      await cleanupTestDb(store);
+    }
+  });
+
+  test("a failed write rolls back the open batch and leaves no transaction behind", async () => {
+    const store = await createTestStore();
+    const collectionPath = join(testDir, `batch-fail-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(collectionPath, { recursive: true });
+    for (const name of ["a.md", "b.md", "c.md"]) await writeFile(join(collectionPath, name), `# ${name}\n\nbody\n`);
+    store.db.exec(`CREATE TRIGGER fail_b BEFORE INSERT ON documents WHEN NEW.path = 'b.md' BEGIN SELECT RAISE(ABORT, 'injected'); END`);
+
+    try {
+      await expect(reindexCollection(store, collectionPath, "**/*.md", "batch-fail")).rejects.toThrow("injected");
+      expect(store.db.inTransaction).toBe(false);
+
+      store.db.exec(`DROP TRIGGER fail_b`);
+      const retry = await reindexCollection(store, collectionPath, "**/*.md", "batch-fail");
+      expect(retry.indexed + retry.unchanged + retry.updated).toBe(3);
+      const rows = store.db.prepare(`SELECT COUNT(*) AS c FROM file_sync_state WHERE collection = ?`).get("batch-fail") as { c: number };
+      expect(rows.c).toBe(3);
+    } finally {
+      await rm(collectionPath, { recursive: true, force: true });
+      await cleanupTestDb(store);
+    }
+  });
+
   test("files over 10 MB are skipped with FILE_TOO_LARGE and not indexed", async () => {
     const store = await createTestStore();
     const dir = await collectionDir("sync-too-large");

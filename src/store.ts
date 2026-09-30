@@ -1730,6 +1730,43 @@ function retireIndexedFile(
 }
 
 /**
+ * Groups the per-file writes of a collection scan into short transactions.
+ * Committed one by one, a first index of a large collection writes a content
+ * row, a document, its metadata and a sync row per file, each its own WAL
+ * commit: 20,000 files took about 176 s that way. A batch closes after
+ * `maxFiles` files or `maxMs`, so other writers never wait longer than that.
+ */
+export function scanWriteBatch(db: Database, maxFiles: number = 500, maxMs: number = 250) {
+  let open = false;
+  let files = 0;
+  let startedAt = 0;
+  const commit = (): void => {
+    if (!open) return;
+    open = false;
+    db.exec("COMMIT");
+  };
+  return {
+    /** Call before a file's writes; closes the batch when it is full or old. */
+    next(): void {
+      if (open && (files >= maxFiles || Date.now() - startedAt >= maxMs)) commit();
+      if (!open) {
+        db.exec("BEGIN");
+        open = true;
+        files = 0;
+        startedAt = Date.now();
+      }
+      files++;
+    },
+    commit,
+    rollback(): void {
+      if (!open) return;
+      open = false;
+      db.exec("ROLLBACK");
+    },
+  };
+}
+
+/**
  * Re-index a single collection by scanning the filesystem and updating the database.
  * Uses mtime+size fast-path (file_sync_state) to avoid re-reading unchanged files.
  * Pure function — no console output, no db lifecycle management.
@@ -1739,6 +1776,28 @@ function retireIndexedFile(
  * Skips >10MB and empty files, cleans sync table entry on orphan removal.
  */
 export async function reindexCollection(
+  store: Store,
+  collectionPath: string,
+  globPattern: string,
+  collectionName: string,
+  options?: {
+    ignorePatterns?: string[];
+    onProgress?: (info: ReindexProgress) => void;
+  }
+): Promise<ReindexResult> {
+  const batch = scanWriteBatch(store.db);
+  try {
+    const result = await reindexCollectionIn(batch, store, collectionPath, globPattern, collectionName, options);
+    batch.commit();
+    return result;
+  } catch (err) {
+    batch.rollback();
+    throw err;
+  }
+}
+
+async function reindexCollectionIn(
+  batch: ReturnType<typeof scanWriteBatch>,
   store: Store,
   collectionPath: string,
   globPattern: string,
@@ -1779,6 +1838,7 @@ export async function reindexCollection(
   const syncStateMap = getFileSyncStateMap(db, collectionName);
 
   for (const relativeFile of files) {
+    batch.next();
     const path = normalizePathSeparators(relativeFile);
     const filepath = getRealPath(resolve(collectionPath, relativeFile));
     if (!isPathInsideDir(collectionPath, filepath)) {
@@ -1920,11 +1980,14 @@ export async function reindexCollection(
   let removed = 0;
   for (const path of allActive) {
     if (!seenPaths.has(path)) {
+      batch.next();
       deactivateDocument(db, collectionName, path);
       deleteFileSyncStateForCollection(db, collectionName, path);
       removed++;
     }
   }
+
+  batch.commit();
 
   const orphanedCleaned = cleanupOrphanedContent(db);
 

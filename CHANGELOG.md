@@ -56,6 +56,10 @@
   bounds memory on indexes with very large documents. A match past that point
   is still found, but its snippet, and the passage the reranker scores, come
   from the start of the document. #962 (thanks @rikvanriel)
+- `qmd update` and `qmd collection add` write a collection scan in short
+  transactions instead of committing every row on its own, so a first index
+  of 20,000 files takes about 5 s instead of about 3 minutes. #1021 (thanks
+  @brettdavies)
 
 ## [2.8.3] - 2026-08-16
 

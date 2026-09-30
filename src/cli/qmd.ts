@@ -81,6 +81,7 @@ import {
   createStore,
   getDefaultDbPath,
   reindexCollection,
+  scanWriteBatch,
   REINDEX_MAX_FILE_SIZE,
   generateEmbeddings,
   maybeAdoptLegacyEmbeddingFingerprint,
@@ -2132,7 +2133,9 @@ async function indexFiles(pwd?: string, globPattern: string = DEFAULT_GLOB, coll
   const livePaths = new Set(files.map(f => f.replace(/\\/g, '/')));
   const startTime = Date.now();
 
+  const batch = scanWriteBatch(db);
   for (const relativeFile of files) {
+    batch.next();
     const filepath = getRealPath(resolve(resolvedPwd, relativeFile));
     // Store the literal relative path — handelize() is NOT applied at index time.
     const path = relativeFile.replace(/\\/g, '/');
@@ -2226,10 +2229,13 @@ async function indexFiles(pwd?: string, globPattern: string = DEFAULT_GLOB, coll
   let removed = 0;
   for (const path of allActive) {
     if (!seenPaths.has(path)) {
+      batch.next();
       deactivateDocument(db, collectionName, path);
       removed++;
     }
   }
+
+  batch.commit();
 
   // Clean up orphaned content hashes (content not referenced by any document)
   const orphanedContent = cleanupOrphanedContent(db);
