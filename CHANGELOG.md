@@ -13,6 +13,10 @@
   with the store-selected embedding model instead of the global default. This
   keeps chunk boundaries aligned with the model that creates and verifies the
   stored vectors without initializing an unrelated provider.
+- The SDK's `renameCollection()` now moves the collection's indexed documents
+  to the new name. Before, only the configuration was renamed, so `get()`,
+  scoped search, and document counts under the new name found nothing until
+  the collection was indexed again. (#1019)
 
 ## [2.8.3] - 2026-08-16
 
