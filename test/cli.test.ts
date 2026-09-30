@@ -700,7 +700,9 @@ describe("CLI Add Command", () => {
     );
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Indexed: 1 new");
-    expect(stderr).toContain("big.md (FILE_TOO_LARGE)");
+    expect(stderr).toContain("Skipped file over 10 MB: big.md");
+    expect(stderr).toContain("Skipped 1 file(s) over 10 MB");
+    expect(stderr).not.toContain("unreadable");
   });
 
   test("can recreate collection with remove and add", async () => {
