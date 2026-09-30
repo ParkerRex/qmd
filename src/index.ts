@@ -33,7 +33,7 @@ import {
   getStoreGlobalContext,
   getStoreContexts,
   upsertStoreCollection,
-  deleteStoreCollection,
+  removeCollection as removeStoreCollection,
   renameStoreCollection,
   updateStoreContext,
   removeStoreContext,
@@ -549,11 +549,14 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
       }
     },
     removeCollection: async (name) => {
-      const result = deleteStoreCollection(db, name);
+      const exists = getStoreCollection(db, name) !== null;
+      if (exists) {
+        removeStoreCollection(db, name);
+      }
       if (hasYamlConfig || options.config) {
         collectionsRemoveCollection(name);
       }
-      return result;
+      return exists;
     },
     renameCollection: async (oldName, newName) => {
       const result = renameStoreCollection(db, oldName, newName);
