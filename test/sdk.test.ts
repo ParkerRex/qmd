@@ -196,14 +196,34 @@ describe("collection management", () => {
     expect(removed).toBe(false);
   });
 
-  test("renameCollection renames a collection", async () => {
-    await store.addCollection("old-name", { path: docsDir, pattern: "**/*.md" });
-    const renamed = await store.renameCollection("old-name", "new-name");
+  test("renameCollection moves indexed documents to the new name", async () => {
+    const renameDir = await mkdtemp(join(testDir, "rename-"));
+    await writeFile(join(renameDir, "auth.md"), "---\nqmd:\n  metadata:\n    status: approved\n---\n# Authentication\n\nAuthentication uses JWT tokens for session management.\n");
+    await writeFile(join(renameDir, "cjk.md"), "# 报文处理\n\n手工发报支持 pacs.008 报文。\n");
+    await store.addCollection("original", { path: renameDir, pattern: "**/*.md" });
+    await store.update();
+    const before = await store.get("qmd://original/auth.md");
+    if ("error" in before) throw new Error(`auth.md was not indexed: ${before.error}`);
+
+    const renamed = await store.renameCollection("original", "renamed");
 
     expect(renamed).toBe(true);
-    const names = (await store.listCollections()).map(c => c.name);
-    expect(names).toContain("new-name");
-    expect(names).not.toContain("old-name");
+    const collections = await store.listCollections();
+    expect(collections.map(c => [c.name, c.active_count])).toEqual([["renamed", 2]]);
+    expect(await store.get("qmd://original/auth.md")).toMatchObject({ error: "not_found" });
+    expect(await store.get("qmd://renamed/auth.md")).toMatchObject({ collectionName: "renamed", hash: before.hash });
+
+    const lexical = await store.searchLex("JWT", { collection: "renamed" });
+    expect(lexical.map(r => r.filepath)).toEqual(["qmd://renamed/auth.md"]);
+    // CJK text is searchable only through its per-character FTS normalization.
+    const cjk = await store.searchLex("报文处理", { collection: "renamed" });
+    expect(cjk.map(r => r.filepath)).toEqual(["qmd://renamed/cjk.md"]);
+    // Frontmatter metadata is keyed by document id, so it survives only if the rows move in place.
+    const approved = await store.searchLex("JWT", {
+      collection: "renamed",
+      filter: { key: "status", operator: "eq", value: "approved" },
+    });
+    expect(approved.map(r => r.filepath)).toEqual(["qmd://renamed/auth.md"]);
   });
 
   test("renameCollection returns false for non-existent source", async () => {
@@ -211,11 +231,16 @@ describe("collection management", () => {
     expect(renamed).toBe(false);
   });
 
-  test("renameCollection throws if target exists", async () => {
+  test("renameCollection throws if target exists and leaves both collections intact", async () => {
     await store.addCollection("a", { path: docsDir, pattern: "**/*.md" });
     await store.addCollection("b", { path: notesDir, pattern: "**/*.md" });
+    await store.update();
 
     await expect(store.renameCollection("a", "b")).rejects.toThrow("already exists");
+
+    const collections = await store.listCollections();
+    expect(collections.map(c => [c.name, c.active_count])).toEqual([["a", 3], ["b", 3]]);
+    expect(await store.get("qmd://a/auth.md")).toMatchObject({ collectionName: "a", title: "Authentication" });
   });
 
   test("listCollections returns empty array for empty config", async () => {
