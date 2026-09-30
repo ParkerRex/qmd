@@ -138,9 +138,9 @@ export function splitGlobMask(mask: string): string[] {
 export const DEFAULT_MULTI_GET_MAX_BYTES = 64 * 1024; // 64KB
 
 /**
- * Characters of a document body that search results and getHashesForEmbedding
- * return, so one very large document cannot put its whole text on the heap
- * per result.
+ * Characters of a document body that search results, the vector body lookup
+ * and getHashesForEmbedding return (SQLite's substr counts characters), so one
+ * very large document cannot put its whole text on the heap per result.
  */
 const BODY_CAP_CHARS = 262_144;
 
@@ -4822,7 +4822,9 @@ export async function searchVec(db: Database, query: string, model: string, limi
   const scan = knnVecScanner(db, collectionIds !== undefined, eligible !== undefined);
   const resolve = vecDocumentResolver(db, filter);
   const queryVec = new Float32Array(embedding);
-  const bodyOf = db.prepare(`SELECT doc FROM content WHERE hash = ?`);
+  // Bodies are capped at BODY_CAP_CHARS, as in searchFTS, so a large document cannot
+  // put its whole text on the heap for each result.
+  const bodyOf = db.prepare(`SELECT ${cappedBodySql("doc")} AS doc FROM content WHERE hash = ?`);
 
   // Each target yields its own nearest `limit` documents (or all it holds), so
   // merging them by distance gives the scope's exact nearest `limit`.

@@ -4925,7 +4925,7 @@ describe("Vector Search collection filter", () => {
 
     // Replays another process's orphaned-content cleanup landing between
     // document resolution and the body read.
-    const bodySql = "SELECT doc FROM content WHERE hash = ?";
+    const bodySql = "SELECT CASE WHEN length(CAST(doc AS BLOB)) <= 262144 THEN doc ELSE substr(doc, 1, 262144) END AS doc FROM content WHERE hash = ?";
     const racing: Database = {
       prepare: (sql: string) => {
         const statement = store.db.prepare(sql);
