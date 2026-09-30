@@ -182,13 +182,35 @@ describe("collection management", () => {
     expect(collections.find(c => c.name === "notes")).toBeDefined();
   });
 
-  test("removeCollection removes existing collection", async () => {
+  test("removeCollection removes existing collection and its indexed documents", async () => {
     await store.addCollection("docs", { path: docsDir, pattern: "**/*.md" });
+    // "guide" indexes readme.md too, so the two collections share its content.
+    await store.addCollection("guide", { path: docsDir, pattern: "readme.md" });
+    // "archive" keeps an inactive document with auth.md's content after its file is deleted.
+    const archiveDir = await mkdtemp(join(testDir, "archive-"));
+    await copyFile(join(docsDir, "auth.md"), join(archiveDir, "auth.md"));
+    await store.addCollection("archive", { path: archiveDir, pattern: "**/*.md" });
+    await store.update();
+    await rm(join(archiveDir, "auth.md"));
+    await store.update({ collections: ["archive"] });
+    expect((await store.listCollections()).find(c => c.name === "archive"))
+      .toMatchObject({ doc_count: 1, active_count: 0 });
+
     const removed = await store.removeCollection("docs");
 
     expect(removed).toBe(true);
     const collections = await store.listCollections();
-    expect(collections.map(c => c.name)).not.toContain("docs");
+    expect(collections.map(c => c.name).sort()).toEqual(["archive", "guide"]);
+    expect(collections.find(c => c.name === "archive")).toMatchObject({ doc_count: 1, active_count: 0 });
+    expect(await store.searchLex("JWT")).toEqual([]);
+    expect(await store.get("qmd://docs/auth.md")).toMatchObject({ error: "not_found" });
+
+    const shared = await store.searchLex("getting started");
+    expect(shared.map(r => r.filepath)).toEqual(["qmd://guide/readme.md"]);
+    expect(await store.get("qmd://guide/readme.md", { includeBody: true })).toMatchObject({
+      title: "Getting Started",
+      body: expect.stringContaining("getting started guide"),
+    });
   });
 
   test("removeCollection returns false for non-existent collection", async () => {
