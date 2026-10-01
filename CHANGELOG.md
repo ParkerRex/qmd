@@ -16,7 +16,8 @@
 - The SDK's `renameCollection()` now moves the collection's indexed documents
   to the new name. Before, only the configuration was renamed, so `get()`,
   scoped search, and document counts under the new name found nothing until
-  the collection was indexed again. (#1019)
+  the collection was indexed again. If writing the configuration fails, the
+  indexed documents and collection settings now keep their original names. (#1019)
 
 ## [2.8.3] - 2026-08-16
 
