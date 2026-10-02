@@ -103,6 +103,22 @@ export function splitGlobMask(mask: string): string[] {
 }
 
 export const DEFAULT_MULTI_GET_MAX_BYTES = 64 * 1024; // 64KB
+
+/**
+ * Characters of a document body that search results and getHashesForEmbedding
+ * return, so one very large document cannot put its whole text on the heap
+ * per result.
+ */
+const BODY_CAP_CHARS = 262_144;
+
+/**
+ * SQL for the first BODY_CAP_CHARS characters of a body column. substr()
+ * stops at an embedded NUL, so a body whose UTF-8 encoding fits the cap is
+ * returned whole and only a longer one goes through substr().
+ */
+function cappedBodySql(column: string): string {
+  return `CASE WHEN length(CAST(${column} AS BLOB)) <= ${BODY_CAP_CHARS} THEN ${column} ELSE substr(${column}, 1, ${BODY_CAP_CHARS}) END`;
+}
 export const DEFAULT_EMBED_MAX_DOCS_PER_BATCH = 64;
 export const DEFAULT_EMBED_MAX_BATCH_BYTES = 64 * 1024 * 1024; // 64MB
 export const DEFAULT_EMBED_MAX_DURATION_MS = 30 * 60 * 1000; // 30 minutes; see EmbedOptions.maxDurationMs
@@ -4466,7 +4482,7 @@ export function searchFTS(db: Database, query: string, limit: number = 20, colle
       'qmd://' || d.collection || '/' || d.path as filepath,
       d.collection || '/' || d.path as display_path,
       d.title,
-      substr(content.doc, 1, 262144) as body,
+      ${cappedBodySql("content.doc")} as body,
       d.hash,
       fm.bm25_score,
       dm.metadata_json
@@ -4679,7 +4695,7 @@ export async function searchVec(db: Database, query: string, model: string, limi
       'qmd://' || d.collection || '/' || d.path as filepath,
       d.collection || '/' || d.path as display_path,
       d.title,
-      substr(content.doc, 1, 262144) as body,
+      ${cappedBodySql("content.doc")} as body,
       dm.metadata_json
     FROM content_vectors cv
     JOIN documents d ON d.hash = cv.hash AND d.active = 1
@@ -4762,7 +4778,7 @@ export function getHashesForEmbedding(db: Database, model: string = DEFAULT_EMBE
   const fingerprint = getEmbeddingFingerprint(model);
   return withLazyContentVectorMigration(db, () => {
     const stmt = db.prepare(`
-    SELECT d.hash, substr(c.doc, 1, 262144) as body, MIN(d.path) as path
+    SELECT d.hash, ${cappedBodySql("c.doc")} as body, MIN(d.path) as path
     FROM documents d
     JOIN content c ON d.hash = c.hash
     LEFT JOIN (

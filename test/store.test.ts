@@ -3438,6 +3438,49 @@ describe("Reindex Collection file sync state (#962)", () => {
       await cleanupTestDb(store);
     }
   });
+
+  test("searchFTS returns a short body with an embedded NUL in full", async () => {
+    const store = await createTestStore();
+    try {
+      const body = "# Nul\n\nzebranul before\u0000after \u00e4\u{1F600}";
+      await insertTestDocument(store.db, "docs", { name: "nul", body, displayPath: "nul.md" });
+
+      const results = store.searchFTS("zebranul", 5);
+      expect(results).toHaveLength(1);
+      expect(results[0]!.body).toBe(body);
+    } finally {
+      await cleanupTestDb(store);
+    }
+  });
+
+  test("searchVec returns a short body with an embedded NUL in full", async () => {
+    const store = await createTestStore();
+    try {
+      const body = "# Nul\n\nvector before\u0000after \u00e4\u{1F600}";
+      const hash = await hashContent(body);
+      await insertTestDocument(store.db, "docs", { name: "nul", body, hash, displayPath: "nul.md" });
+      store.ensureVecTable(3);
+      store.insertEmbedding(hash, 0, 0, new Float32Array([1, 0, 0]), "cap-model", new Date().toISOString());
+
+      const results = await store.searchVec("q", "cap-model", 5, undefined, undefined, [1, 0, 0]);
+      expect(results).toHaveLength(1);
+      expect(results[0]!.body).toBe(body);
+    } finally {
+      await cleanupTestDb(store);
+    }
+  });
+
+  test("getHashesForEmbedding returns a short body with an embedded NUL in full", async () => {
+    const store = await createTestStore();
+    try {
+      const body = "# Nul\n\nembed before\u0000after \u00e4\u{1F600}";
+      await insertTestDocument(store.db, "docs", { name: "nul", body, displayPath: "nul.md" });
+
+      expect(store.getHashesForEmbedding().map(row => row.body)).toEqual([body]);
+    } finally {
+      await cleanupTestDb(store);
+    }
+  });
 });
 
 // =============================================================================
