@@ -285,7 +285,7 @@ describe("searchVec with metadata filter", () => {
     expect(filtered.map(r => r.displayPath)).toEqual(["docs/b.md"]);
   });
 
-  const eligibleOnly: MetadataFilter = { key: "eligible", operator: "eq", value: true };
+  const eligibleOnly: MetadataFilter = { field: "eligible", operator: "eq", value: true };
 
   /** An eligible document and an ineligible copy of its content in one collection, one chunk per vector. */
   async function insertLongDocumentWithExcludedCopy(vectors: number[][]): Promise<void> {
@@ -330,7 +330,7 @@ describe("searchVec with metadata filter", () => {
 
     const filtered = await searchVec(
       store.db, "q", model, 5, "book", undefined, queryEmbedding, undefined,
-      { key: "eligible", operator: "eq", value: true },
+      { field: "eligible", operator: "eq", value: true },
     );
     expect(filtered).toHaveLength(5);
     expect(filtered.every(r => r.metadata.eligible === true)).toBe(true);
@@ -386,7 +386,7 @@ describe("searchVec with metadata filter", () => {
 
     const filtered = await searchVec(
       store.db, "q", model, 10, "notes", undefined, queryEmbedding, undefined,
-      { key: "status", operator: "eq", value: "published" },
+      { field: "status", operator: "eq", value: "published" },
     );
     expect(filtered.map(r => r.displayPath)).toEqual(["notes/published-copy.md"]);
   });
