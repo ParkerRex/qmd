@@ -6,7 +6,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-import { mkdtemp, writeFile, mkdir, rm, copyFile } from "node:fs/promises";
+import { mkdtemp, writeFile, mkdir, rm, copyFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
@@ -474,6 +474,58 @@ describe("YAML config file mode", () => {
     const parsed = YAML.parse(raw) as CollectionConfig;
     expect(parsed.collections).toHaveProperty("newcol");
     expect(parsed.collections.newcol!.path).toBe(docsDir);
+  });
+
+  // POSIX write permissions do not restrict root and are not portable to Windows.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("removeCollection preserves indexed documents when YAML writing fails", async () => {
+    const configPath = join(testDir, "remove-write-failure.yml");
+    const dbPath = freshDbPath();
+    const config: CollectionConfig = {
+      collections: { docs: { path: docsDir, pattern: "**/*.md" } },
+    };
+    const yaml = YAML.stringify(config);
+    await writeFile(configPath, yaml);
+    let store = await createStore({ dbPath, configPath });
+
+    const expectIndexedCollection = async () => {
+      expect(await store.get("qmd://docs/auth.md", { includeBody: true })).toMatchObject({
+        collectionName: "docs", title: "Authentication",
+        body: readFileSync(join(docsDir, "auth.md"), "utf-8"),
+      });
+      expect((await store.searchLex("JWT", { collection: "docs" })).map(r => r.filepath))
+        .toEqual(["qmd://docs/auth.md"]);
+      expect((await store.listCollections()).map(c => [c.name, c.active_count]))
+        .toEqual([["docs", 3]]);
+    };
+
+    try {
+      await store.update();
+      await expectIndexedCollection();
+      await chmod(configPath, 0o444);
+
+      await expect(store.removeCollection("docs")).rejects.toThrow("EACCES");
+      expect(readFileSync(configPath, "utf-8")).toBe(yaml);
+      await expectIndexedCollection();
+
+      await chmod(configPath, 0o644);
+      await store.close();
+      store = await createStore({ dbPath, configPath });
+      await expectIndexedCollection();
+
+      await store.close();
+      // A changed config forces a resync instead of reusing the stored config hash.
+      await writeFile(configPath, YAML.stringify({ ...config, global_context: "Reload config" }));
+      store = await createStore({ dbPath, configPath });
+      await expectIndexedCollection();
+
+      expect(await store.removeCollection("docs")).toBe(true);
+      expect(await store.listCollections()).toEqual([]);
+      expect(await store.get("qmd://docs/auth.md")).toMatchObject({ error: "not_found" });
+      expect(await store.searchLex("JWT")).toEqual([]);
+    } finally {
+      await chmod(configPath, 0o644);
+      await store.close();
+    }
   });
 
   test("context persists to YAML file", async () => {

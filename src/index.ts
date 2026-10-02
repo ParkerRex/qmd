@@ -549,14 +549,18 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
       }
     },
     removeCollection: async (name) => {
-      const exists = getStoreCollection(db, name) !== null;
-      if (exists) {
-        removeStoreCollection(db, name);
-      }
-      if (hasYamlConfig || options.config) {
-        collectionsRemoveCollection(name);
-      }
-      return exists;
+      // Keep indexed documents if config write-through fails.
+      const remove = db.transaction(() => {
+        const exists = getStoreCollection(db, name) !== null;
+        if (exists) {
+          removeStoreCollection(db, name);
+        }
+        if (hasYamlConfig || options.config) {
+          collectionsRemoveCollection(name);
+        }
+        return exists;
+      });
+      return remove();
     },
     renameCollection: async (oldName, newName) => {
       const result = renameStoreCollection(db, oldName, newName);
