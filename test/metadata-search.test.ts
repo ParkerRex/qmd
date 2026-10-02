@@ -90,7 +90,7 @@ describe("searchFTS with metadata filter", () => {
     );
 
     const filtered = searchFTS(store.db, "alpha", 5, undefined, {
-      key: "status", operator: "eq", value: "published",
+      field: "status", operator: "eq", value: "published",
     });
     expect(filtered.map(r => r.displayPath)).toEqual(["notes/target.md"]);
   });
@@ -321,7 +321,7 @@ describe("structuredSearch with metadata filter", () => {
 });
 
 describe("searchFTS with a collection scope and a metadata filter together", () => {
-  const published: MetadataFilter = { key: "status", operator: "eq", value: "published" };
+  const published: MetadataFilter = { field: "status", operator: "eq", value: "published" };
 
   test("returns the in-scope document the filter admits, past both the window and a stronger draft", async () => {
     // Every noise document outranks both small-collection documents globally,
