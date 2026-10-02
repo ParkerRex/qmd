@@ -4724,10 +4724,21 @@ function metadataEligibleRowsSql(filter: MetadataFilter): { sql: string; params:
   };
 }
 
-/** Ids of the collections holding at least one vector row a metadata filter admits. */
+/**
+ * Ids of the collections holding at least one vector row a metadata filter
+ * admits. The filter runs once per document and EXISTS probes for a row, so
+ * the cost follows the documents in scope rather than their chunk count.
+ */
 function metadataEligibleCollections(db: Database, filter: MetadataFilter): Set<number> {
-  const eligible = metadataEligibleRowsSql(filter);
-  const rows = db.prepare(`SELECT DISTINCT vr.collection_id AS collectionId ${eligible.sql}`).all(...eligible.params) as { collectionId: number }[];
+  const current = compileCurrentMetadataFilter(filter);
+  const rows = db.prepare(`
+    SELECT DISTINCT ci.id AS collectionId
+    FROM documents d
+    JOIN document_metadata dm ON dm.document_id = d.id
+    JOIN ${VEC_COLLECTION_IDS_TABLE} ci ON ci.name = d.collection
+    WHERE d.active = 1 AND ${current.sql}
+      AND EXISTS (SELECT 1 FROM ${VEC_ROWS_TABLE} vr WHERE vr.hash = d.hash AND vr.collection_id = ci.id)
+  `).all(...current.params) as { collectionId: number }[];
   return new Set(rows.map(row => row.collectionId));
 }
 
