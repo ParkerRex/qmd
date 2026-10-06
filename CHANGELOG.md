@@ -61,6 +61,14 @@
   of 20,000 files takes about 5 s instead of about 3 minutes. #1021 (thanks
   @brettdavies)
 
+- `qmd query` and `qmd vsearch` now drop repeated query expansions before
+  searching. The expansion model can repeat a line, and the cache kept every
+  copy: one reported query ran 23 expansions where 9 were distinct, and each
+  copy ran its own search. Cached expansions are deduplicated when read, so
+  existing caches need no rebuild. Repeated lex lines used to count more than
+  once in the rank fusion, so result order can shift slightly. (#921)
+  #1000 (thanks @ParkerRex)
+
 ## [2.8.3] - 2026-08-16
 
 ### Security
