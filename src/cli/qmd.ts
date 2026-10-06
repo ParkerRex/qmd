@@ -81,6 +81,8 @@ import {
   createStore,
   getDefaultDbPath,
   reindexCollection,
+  scanWriteBatch,
+  REINDEX_MAX_FILE_SIZE,
   generateEmbeddings,
   maybeAdoptLegacyEmbeddingFingerprint,
   syncConfigToDb,
@@ -2131,13 +2133,23 @@ async function indexFiles(pwd?: string, globPattern: string = DEFAULT_GLOB, coll
   const livePaths = new Set(files.map(f => f.replace(/\\/g, '/')));
   const startTime = Date.now();
 
+  const batch = scanWriteBatch(db);
   for (const relativeFile of files) {
+    batch.next();
     const filepath = getRealPath(resolve(resolvedPwd, relativeFile));
     // Store the literal relative path — handelize() is NOT applied at index time.
     const path = relativeFile.replace(/\\/g, '/');
     if (!isPathInsideDir(resolvedPwd, filepath)) {
       processed++;
       skippedFiles.push({ file: relativeFile, code: "OUTSIDE_COLLECTION" });
+      progress.set((processed / total) * 100);
+      continue;
+    }
+    let tooLarge = false;
+    try { tooLarge = statSync(filepath).size > REINDEX_MAX_FILE_SIZE; } catch { /* the read below reports it */ }
+    if (tooLarge) {
+      processed++;
+      skippedFiles.push({ file: relativeFile, code: "FILE_TOO_LARGE" });
       progress.set((processed / total) * 100);
       continue;
     }
@@ -2217,10 +2229,13 @@ async function indexFiles(pwd?: string, globPattern: string = DEFAULT_GLOB, coll
   let removed = 0;
   for (const path of allActive) {
     if (!seenPaths.has(path)) {
+      batch.next();
       deactivateDocument(db, collectionName, path);
       removed++;
     }
   }
+
+  batch.commit();
 
   // Clean up orphaned content hashes (content not referenced by any document)
   const orphanedContent = cleanupOrphanedContent(db);
@@ -2258,16 +2273,21 @@ function reportMetadataErrors(metadataErrors: number): void {
 
 function reportSkippedReads(skippedFiles: { file: string; code: string }[]): void {
   if (skippedFiles.length === 0) return;
+  const sizeLimitMb = Math.round(REINDEX_MAX_FILE_SIZE / (1024 * 1024));
   for (const skipped of skippedFiles) {
     if (skipped.code === "OUTSIDE_COLLECTION") {
       console.warn(`⚠ Skipped file outside collection: ${skipped.file}`);
+    } else if (skipped.code === "FILE_TOO_LARGE") {
+      console.warn(`⚠ Skipped file over ${sizeLimitMb} MB: ${skipped.file}`);
     } else {
       console.warn(`⚠ Skipped unreadable file: ${skipped.file} (${skipped.code})`);
     }
   }
   const escaped = skippedFiles.filter(f => f.code === "OUTSIDE_COLLECTION").length;
-  const unreadable = skippedFiles.length - escaped;
+  const tooLarge = skippedFiles.filter(f => f.code === "FILE_TOO_LARGE").length;
+  const unreadable = skippedFiles.length - escaped - tooLarge;
   if (escaped) console.warn(`Skipped ${escaped} file(s) outside the collection root`);
+  if (tooLarge) console.warn(`Skipped ${tooLarge} file(s) over ${sizeLimitMb} MB`);
   if (unreadable) console.warn(`Skipped ${unreadable} unreadable file(s)`);
 }
 
