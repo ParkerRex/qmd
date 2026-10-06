@@ -20,6 +20,17 @@
 ### Fixed
 
 - Filtered vector search binds candidate IDs as one JSON list, so a parser-valid metadata filter cannot exhaust Node's SQL variable limit during document lookup. Applies to both exact scans and the capped global fallback.
+- Collection- and metadata-scoped BM25 search (`qmd search -c`, the lex leg of
+  `qmd query`, MCP, SDK `searchLex`) no longer returns false-empty or
+  incomplete results when stronger matches outside the scope fill the old
+  `limit * 10` candidate window (#922). The scope is now applied to the full
+  FTS5 match set, materialized once, so `search -c <collection>` is exact for
+  common terms; unscoped search keeps its early-terminating plan. A search over
+  several collections, such as the default ones, runs one keyword query instead
+  of one per collection, which made keyword search about 12x faster over 13
+  collections (thanks @brettdavies). Builds on the approach in #918 (thanks
+  @fxstein). #953 (thanks @Mr-Beasley)
+
 - Embedding generation and legacy fingerprint adoption now tokenize documents
   with the store-selected embedding model instead of the global default. This
   keeps chunk boundaries aligned with the model that creates and verifies the
@@ -68,6 +79,12 @@
   existing caches need no rebuild. Repeated lex lines used to count more than
   once in the rank fusion, so result order can shift slightly. (#921)
   #1000 (thanks @ParkerRex)
+- Structured searches over several collections (`qmd query` with
+  `lex:`/`vec:`/`hyde:` lines, the MCP `query` tool, SDK `queries`) run one
+  search per line over the whole collection list, a keyword search for a
+  `lex:` line and a vector search for a `vec:` or `hyde:` line, and fuse one
+  ranked list per search. Rankings no longer depend on the order the
+  collections are named. #946 (thanks @shalom-t), #1009 (thanks @xidus90)
 
 ## [2.8.3] - 2026-08-16
 

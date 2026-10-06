@@ -4439,19 +4439,19 @@ function mergeSearchResultsByScore(lists: SearchResult[][], limit: number): Sear
       if (!prev || r.score > prev.score) best.set(r.filepath, r);
     }
   }
+  // Ties go to the smaller filepath, so the order the collections were named
+  // never decides which of two equal hits survives the limit.
   return Array.from(best.values())
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || compareFilepaths(a, b))
     .slice(0, limit);
+}
+
+function compareFilepaths(a: { filepath: string }, b: { filepath: string }): number {
+  return a.filepath < b.filepath ? -1 : a.filepath > b.filepath ? 1 : 0;
 }
 
 export function searchFTS(db: Database, query: string, limit: number = 20, collectionName?: string | readonly string[], filter?: MetadataFilter): SearchResult[] {
   const names = scopedCollectionNames(collectionName);
-  // Search each requested collection before merging/truncating so a large
-  // unrelated collection cannot occupy global top-k and starve the rest (#775).
-  if (names && names.length > 1) {
-    return mergeSearchResultsByScore(names.map(name => searchFTS(db, query, limit, name, filter)), limit);
-  }
-  const collectionFilter = names?.[0];
 
   const ftsQuery = buildFTS5Query(query);
   if (!ftsQuery) return [];
@@ -4463,20 +4463,24 @@ export function searchFTS(db: Database, query: string, limit: number = 20, colle
   // query into a 17-second query on large collections.
   const params: (string | number)[] = [ftsQuery];
 
-  // When filtering by collection or metadata, fetch extra candidates from the
-  // FTS index since some will be filtered out. Without a filter we can fetch
-  // exactly the requested limit. Selective filters remain best-effort: an
-  // eligible document outside this candidate window is missed (same
-  // completeness contract as collection filtering).
-  const ftsLimit = (collectionFilter || filter) ? limit * 10 : limit;
+  // Unscoped, the MATCH is the whole answer: LIMIT inside the CTE lets FTS5
+  // stop at the requested count. Scoped by collection or metadata, the filter
+  // must see the COMPLETE match set — any inner LIMIT (the old `limit * 10`)
+  // returns false-empty results whenever stronger out-of-scope matches fill
+  // the window (#922). MATERIALIZED keeps the planner from flattening the CTE
+  // and folding the filter back into the MATCH. The set is corpus-bounded:
+  // at most one row per matching document.
+  // Because the scope sees every match, one query over the whole collection
+  // list returns what a query per collection merged by score would (#775):
+  // a large collection can no longer crowd the others out of a window.
+  const scoped = Boolean(names || filter);
 
   let sql = `
-    WITH fts_matches AS (
+    WITH fts_matches AS ${scoped ? "MATERIALIZED " : ""}(
       SELECT rowid, bm25(documents_fts, 1.5, 4.0, 1.0) as bm25_score
       FROM documents_fts
       WHERE documents_fts MATCH ?
-      ORDER BY bm25_score ASC
-      LIMIT ${ftsLimit}
+      ${scoped ? "" : `ORDER BY bm25_score ASC LIMIT ${limit}`}
     )
     SELECT
       'qmd://' || d.collection || '/' || d.path as filepath,
@@ -4493,9 +4497,9 @@ export function searchFTS(db: Database, query: string, limit: number = 20, colle
     WHERE d.active = 1
   `;
 
-  if (collectionFilter) {
-    sql += ` AND d.collection = ?`;
-    params.push(String(collectionFilter));
+  if (names) {
+    sql += ` AND d.collection IN (SELECT value FROM json_each(?))`;
+    params.push(JSON.stringify(names));
   }
 
   if (filter) {
@@ -4506,8 +4510,9 @@ export function searchFTS(db: Database, query: string, limit: number = 20, colle
     params.push(...compiledFilter.params);
   }
 
-  // bm25 lower is better; sort ascending.
-  sql += ` ORDER BY fm.bm25_score ASC LIMIT ?`;
+  // bm25 lower is better; sort ascending, ties by filepath as in
+  // mergeSearchResultsByScore.
+  sql += ` ORDER BY fm.bm25_score ASC, filepath ASC LIMIT ?`;
   params.push(limit);
 
   const rows = db.prepare(sql).all(...params) as { filepath: string; display_path: string; title: string; body: string; hash: string; bm25_score: number; metadata_json: string | null }[];
@@ -6410,26 +6415,25 @@ export async function structuredSearch(
     `SELECT name FROM sqlite_master WHERE type='table' AND name='vectors_vec'`
   ).get();
 
-  // Helper to run search across collections (or all if undefined)
-  const collectionList = collections ?? [undefined]; // undefined = all collections
+  // Each search yields ONE ranked list over the union of the named collections
+  // (undefined = all). searchFTS/searchVec merge per-collection results by score,
+  // so the RRF weight below boosts the first search, not the first collection.
 
   // Step 1: Run FTS for all lex searches (sync, instant)
   for (const search of searches) {
     if (search.type === 'lex') {
-      for (const coll of collectionList) {
-        const ftsResults = store.searchFTS(search.query, 20, coll, filter);
-        if (ftsResults.length > 0) {
-          for (const r of ftsResults) docidMap.set(r.filepath, r.docid);
-          rankedLists.push(ftsResults.map(r => ({
-            file: r.filepath, displayPath: r.displayPath,
-            title: r.title, body: r.body || "", score: r.score,
-          })));
-          rankedListMeta.push({
-            source: "fts",
-            queryType: "lex",
-            query: search.query,
-          });
-        }
+      const ftsResults = store.searchFTS(search.query, 20, collections, filter);
+      if (ftsResults.length > 0) {
+        for (const r of ftsResults) docidMap.set(r.filepath, r.docid);
+        rankedLists.push(ftsResults.map(r => ({
+          file: r.filepath, displayPath: r.displayPath,
+          title: r.title, body: r.body || "", score: r.score,
+        })));
+        rankedListMeta.push({
+          source: "fts",
+          queryType: "lex",
+          query: search.query,
+        });
       }
     }
   }
@@ -6453,23 +6457,21 @@ export async function structuredSearch(
         const embedding = embeddings[i]?.embedding;
         if (!embedding) continue;
 
-        for (const coll of collectionList) {
-          const vecResults = await store.searchVec(
-            vecSearches[i]!.query, embedModel, 20, coll,
-            undefined, embedding, filter
-          );
-          if (vecResults.length > 0) {
-            for (const r of vecResults) docidMap.set(r.filepath, r.docid);
-            rankedLists.push(vecResults.map(r => ({
-              file: r.filepath, displayPath: r.displayPath,
-              title: r.title, body: r.body || "", score: r.score,
-            })));
-            rankedListMeta.push({
-              source: "vec",
-              queryType: vecSearches[i]!.type,
-              query: vecSearches[i]!.query,
-            });
-          }
+        const vecResults = await store.searchVec(
+          vecSearches[i]!.query, embedModel, 20, collections,
+          undefined, embedding, filter
+        );
+        if (vecResults.length > 0) {
+          for (const r of vecResults) docidMap.set(r.filepath, r.docid);
+          rankedLists.push(vecResults.map(r => ({
+            file: r.filepath, displayPath: r.displayPath,
+            title: r.title, body: r.body || "", score: r.score,
+          })));
+          rankedListMeta.push({
+            source: "vec",
+            queryType: vecSearches[i]!.type,
+            query: vecSearches[i]!.query,
+          });
         }
       }
     }
