@@ -31,6 +31,13 @@
   collections (thanks @brettdavies). Builds on the approach in #918 (thanks
   @fxstein). #953 (thanks @Mr-Beasley)
 
+- `qmd update` no longer deactivates every document in a collection whose root
+  folder is missing, for example an unmounted drive or an offline network share.
+  The folder globbed to an empty list, which read as "every file was deleted",
+  so search went empty and a `qmd cleanup` before the drive came back deleted
+  the rows for good. The collection is now reported as not found and its index
+  is left unchanged. Permission and I/O errors still fail with their original
+  cause (#989). #990 (thanks @ParkerRex)
 - Embedding generation and legacy fingerprint adoption now tokenize documents
   with the store-selected embedding model instead of the global default. This
   keeps chunk boundaries aligned with the model that creates and verifies the
@@ -85,6 +92,27 @@
   `lex:` line and a vector search for a `vec:` or `hyde:` line, and fuse one
   ranked list per search. Rankings no longer depend on the order the
   collections are named. #946 (thanks @shalom-t), #1009 (thanks @xidus90)
+
+### Changed
+
+- The vector index is partitioned by collection. Each embedded chunk is
+  stored once per collection that holds it, under an integer collection id,
+  so a collection-scoped `qmd query` or `qmd vsearch` scans only that
+  collection's vectors instead of pre-filtering the whole index, and a small
+  collection is never crowded out of the results by a large one. The first
+  command after upgrading converts the index in place and prints its
+  progress; the conversion resumes from where it stopped if interrupted, two
+  commands started at once share it, and a VACUUM at the end reclaims the
+  space of the old table. `qmd collection rename` no longer touches vectors,
+  `qmd update` removes, as it finishes, the vectors of content that no
+  indexed document holds any more (content that comes back later is embedded
+  again), and `qmd update` and `qmd embed` copy an already-embedded document
+  into a collection that gains it instead of embedding it again. A
+  metadata-filtered vector search returns the nearest documents the filter
+  admits however many chunks it admits, and a vector search fills its limit
+  even when one long document holds all of the nearest chunks. Downgrading
+  to an older qmd afterwards needs `qmd embed -f`, and a `qmd mcp` server
+  started before the upgrade must be restarted. #983 (thanks @brettdavies)
 
 ## [2.8.3] - 2026-08-16
 
