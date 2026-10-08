@@ -1460,22 +1460,8 @@ export function renameStoreCollection(db: Database, oldName: string, newName: st
     throw new Error(`Collection '${newName}' already exists`);
   }
 
-  // Indexed documents carry the collection name in their identity and FTS
-  // filepath, so they move with the collection row in one transaction.
-  // documents_au rewrites each moved FTS row from the raw content, dropping
-  // the CJK normalization, so the moved rows are rebuilt afterwards.
-  const rename = db.transaction(() => {
-    const result = db.prepare(`UPDATE store_collections SET name = ? WHERE name = ?`).run(newName, oldName);
-    if (result.changes === 0) return false;
-
-    const moved = db.prepare(`SELECT id FROM documents WHERE collection = ?`).all<{ id: number }>(oldName);
-    db.prepare(`UPDATE documents SET collection = ? WHERE collection = ?`).run(newName, oldName);
-    for (const { id } of moved) {
-      rebuildDocumentFTS(db, id);
-    }
-    return true;
-  });
-  return rename();
+  const result = db.prepare(`UPDATE store_collections SET name = ? WHERE name = ?`).run(newName, oldName);
+  return result.changes > 0;
 }
 
 export function updateStoreContext(db: Database, collectionName: string, path: string, text: string): boolean {
@@ -4352,7 +4338,12 @@ export function renameCollection(db: Database, oldName: string, newName: string)
       }
     }
 
+    // The UPDATE trigger writes raw text; rebuild moved rows to retain CJK normalization.
+    const moved = db.prepare(`SELECT id FROM documents WHERE collection = ?`).all<{ id: number }>(oldName);
     db.prepare(`UPDATE documents SET collection = ? WHERE collection = ?`).run(newName, oldName);
+    for (const { id } of moved) {
+      rebuildDocumentFTS(db, id);
+    }
     // The documents keep their ids and paths, so their sync rows stay valid
     // under the new name. Rows already under it belong to no collection.
     db.prepare(`DELETE FROM file_sync_state WHERE collection = ?`).run(newName);
