@@ -204,6 +204,11 @@ describe("collection management", () => {
     await store.update();
     const before = await store.get("qmd://original/auth.md");
     if ("error" in before) throw new Error(`auth.md was not indexed: ${before.error}`);
+    const model = store.internal.llm?.embedModelName;
+    if (!model) throw new Error("No embedding model selected");
+    const vector = new Float32Array([0.8, 0.6, 0]);
+    store.internal.ensureVecTable(3);
+    store.internal.insertEmbedding(before.hash, 0, 0, vector, model, new Date().toISOString());
 
     const renamed = await store.renameCollection("original", "renamed");
 
@@ -212,6 +217,12 @@ describe("collection management", () => {
     expect(collections.map(c => [c.name, c.active_count])).toEqual([["renamed", 2]]);
     expect(await store.get("qmd://original/auth.md")).toMatchObject({ error: "not_found" });
     expect(await store.get("qmd://renamed/auth.md")).toMatchObject({ collectionName: "renamed", hash: before.hash });
+    const vectors = await store.internal.searchVec("JWT", model, 3, "renamed", undefined, vector);
+    expect(vectors.map(result => result.hash)).toEqual([before.hash]);
+    expect(await store.internal.searchVec("JWT", model, 3, "original", undefined, vector)).toEqual([]);
+    const syncRows = store.internal.db.prepare("SELECT collection FROM file_sync_state ORDER BY relative_path")
+      .all<{ collection: string }>();
+    expect(syncRows.map(row => row.collection)).toEqual(["renamed", "renamed"]);
 
     const lexical = await store.searchLex("JWT", { collection: "renamed" });
     expect(lexical.map(r => r.filepath)).toEqual(["qmd://renamed/auth.md"]);
