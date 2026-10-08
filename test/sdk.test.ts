@@ -232,7 +232,7 @@ describe("collection management", () => {
     // Frontmatter metadata is keyed by document id, so it survives only if the rows move in place.
     const approved = await store.searchLex("JWT", {
       collection: "renamed",
-      filter: { key: "status", operator: "eq", value: "approved" },
+      filter: { field: "status", operator: "eq", value: "approved" },
     });
     expect(approved.map(r => r.filepath)).toEqual(["qmd://renamed/auth.md"]);
   });
